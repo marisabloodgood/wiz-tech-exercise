@@ -1,0 +1,18 @@
+# Node
+node_modules/
+dist/
+
+# Env / secrets
+.env
+.env.local
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# OS
+.DS_Store
+
+# Logs
+*.log

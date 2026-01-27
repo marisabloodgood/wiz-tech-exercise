@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regatta-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: regatta-api
+  template:
+    metadata:
+      labels:
+        app: regatta-api
+    spec:
+      serviceAccountName: regatta-api-sa
+      containers:
+        - name: api
+          image: gcr.io/clgcporg10-162/regatta-api:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MONGO_URI
+              value: mongodb://wizuser:WizPassw0rd!@10.10.0.2:27017/regatta_tracker?authSource=admin
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: regatta-api
+spec:
+  selector:
+    app: regatta-api
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP
