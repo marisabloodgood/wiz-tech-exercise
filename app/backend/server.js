@@ -42,8 +42,7 @@ function toObjectId(id, res) {
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-app.get("/", (req, res) => {
-  res.status(200).send("ok");
+app.get("/", (req, res) => res.status(404).send("backend root - use /api/*"));
 });
 
 // REGATTAS

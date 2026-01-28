@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from "react"
 import blondFuryImg from "./assets/blond-fury.jpg"
 import "./App.css"
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+
 const API = {
-  regattas: "/api/regattas",
-  crew: "/api/crew-members",
+  regattas: `${API_BASE_URL}/api/regattas`,
+  crew: `${API_BASE_URL}/api/crew-members`,
 }
 
 const OMIT_KEYS = new Set(["_id", "__v"])

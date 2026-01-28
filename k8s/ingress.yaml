@@ -7,12 +7,20 @@ metadata:
     kubernetes.io/ingress.global-static-ip-name: "regatta-ip"
 spec:
   rules:
-    - http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: regatta-api
-                port:
-                  number: 8080
+  - host: regattas.blondfury.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: regatta-api
+            port:
+              number: 8080
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: regatta-frontend
+            port:
+              number: 80
