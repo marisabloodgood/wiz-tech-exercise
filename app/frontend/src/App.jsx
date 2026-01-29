@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from "react"
 import blondFuryImg from "./assets/blond-fury.jpg"
 import "./App.css"
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
-
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "" // "" = same origin (prod)
 const API = {
+  login: `${API_BASE_URL}/api/login`,
   regattas: `${API_BASE_URL}/api/regattas`,
   crew: `${API_BASE_URL}/api/crew-members`,
 }
@@ -33,8 +33,7 @@ function safeJsonParse(s) {
 
 function formatValue(v) {
   if (v === null || v === undefined) return "—"
-  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean")
-    return String(v)
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return String(v)
   if (Array.isArray(v)) return v.join(", ")
   if (isObject(v)) return JSON.stringify(v)
   return String(v)
@@ -48,6 +47,26 @@ function hasCert(assignment, needle) {
 function pct(num, denom) {
   if (!denom) return "0%"
   return `${Math.round((num / denom) * 100)}%`
+}
+
+// ---- Token helpers ----
+function getToken() {
+  return localStorage.getItem("token") || ""
+}
+function setToken(token) {
+  localStorage.setItem("token", token)
+}
+function clearToken() {
+  localStorage.removeItem("token")
+}
+async function apiFetch(url, opts = {}) {
+  const token = getToken()
+  const headers = {
+    ...(opts.headers || {}),
+    "Content-Type": "application/json",
+  }
+  if (token) headers.Authorization = `Bearer ${token}`
+  return fetch(url, { ...opts, headers })
 }
 
 /**
@@ -103,9 +122,8 @@ function DynamicObjectForm({ valueObj, onChange, omitKeys = OMIT_KEYS }) {
     const k = newKey.trim()
     if (!k) return
     const vRaw = newVal.trim()
-    // Try to interpret value as JSON; otherwise store as string
     const parsed = safeJsonParse(vRaw)
-    const v = vRaw === "" ? "" : (parsed.ok ? parsed.value : vRaw)
+    const v = vRaw === "" ? "" : parsed.ok ? parsed.value : vRaw
 
     const next = { ...(valueObj || {}) }
     next[k] = v
@@ -120,7 +138,6 @@ function DynamicObjectForm({ valueObj, onChange, omitKeys = OMIT_KEYS }) {
         const v = valueObj?.[k]
         const vType = Array.isArray(v) ? "array" : typeof v
 
-        // simple primitives
         if (vType === "string" || vType === "number") {
           return (
             <div key={k} style={styles.formRow}>
@@ -155,7 +172,6 @@ function DynamicObjectForm({ valueObj, onChange, omitKeys = OMIT_KEYS }) {
           )
         }
 
-        // objects/arrays -> JSON editor
         return (
           <div key={k} style={{ ...styles.formRow, alignItems: "start" }}>
             <label style={styles.label}>{prettyLabel(k)}</label>
@@ -165,7 +181,7 @@ function DynamicObjectForm({ valueObj, onChange, omitKeys = OMIT_KEYS }) {
               onChange={(e) => {
                 const parsed = safeJsonParse(e.target.value)
                 if (parsed.ok) setField(k, parsed.value)
-                else setField(k, e.target.value) // fallback to string
+                else setField(k, e.target.value)
               }}
               rows={5}
             />
@@ -198,6 +214,20 @@ function DynamicObjectForm({ valueObj, onChange, omitKeys = OMIT_KEYS }) {
 }
 
 export default function App() {
+  // auth state
+  const [auth, setAuth] = useState(() => {
+    const token = localStorage.getItem("token") || ""
+    const userRaw = localStorage.getItem("user")
+    return { token, user: userRaw ? JSON.parse(userRaw) : null }
+  })
+  const [loginEmail, setLoginEmail] = useState("")
+  const [loginPassword, setLoginPassword] = useState("")
+  const [authError, setAuthError] = useState("")
+
+  const isLoggedIn = !!auth?.token
+  const isAdmin = auth?.user?.role === "admin"
+
+  // data state
   const [regattas, setRegattas] = useState([])
   const [crew, setCrew] = useState([])
 
@@ -218,11 +248,47 @@ export default function App() {
   // crew selection in regatta modal
   const [selectedCrewIdsForRegatta, setSelectedCrewIdsForRegatta] = useState([])
 
+  const login = async () => {
+    setAuthError("")
+    try {
+      const res = await fetch(API.login, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      })
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "")
+        throw new Error(`Login failed (${res.status}): ${txt}`)
+      }
+
+      const data = await res.json()
+      setToken(data.token)
+      localStorage.setItem("user", JSON.stringify(data.user || null))
+      setAuth({ token: data.token, user: data.user || null })
+      setLoginPassword("")
+      await fetchAll()
+    } catch (e) {
+      setAuthError(e?.message || String(e))
+    }
+  }
+
+  const logout = () => {
+    clearToken()
+    localStorage.removeItem("user")
+    setAuth({ token: "", user: null })
+    setRegattas([])
+    setCrew([])
+    setSelectedRegattaId(null)
+    setSelectedCrewId(null)
+  }
+
   const fetchAll = async () => {
+    if (!isLoggedIn) return
     setLoading(true)
     setError("")
     try {
-      const [r1, r2] = await Promise.all([fetch(API.regattas), fetch(API.crew)])
+      const [r1, r2] = await Promise.all([apiFetch(API.regattas), apiFetch(API.crew)])
       if (!r1.ok) throw new Error(`Failed to fetch regattas (${r1.status})`)
       if (!r2.ok) throw new Error(`Failed to fetch crew members (${r2.status})`)
       const regData = await r1.json()
@@ -244,9 +310,9 @@ export default function App() {
   }
 
   useEffect(() => {
-    fetchAll()
+    if (isLoggedIn) fetchAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [isLoggedIn])
 
   const selectedRegatta = useMemo(() => {
     if (!selectedRegattaId) return null
@@ -266,24 +332,31 @@ export default function App() {
     return { total, safety, mob }
   }, [selectedRegatta])
 
+  // permission for editing selected crew
+  const canEditSelectedCrew =
+    isAdmin ||
+    (auth?.user?.role === "crew" &&
+      auth?.user?.crewMemberId &&
+      selectedCrewId &&
+      String(auth.user.crewMemberId) === String(selectedCrewId))
+
   // --- CRUD helpers ---
   const saveRegatta = async () => {
     if (!regattaDraft) return
 
-    // Build assignments from selected crew
-    // Preserve any existing assignment metadata if already present
     const crewById = new Map(crew.map((c) => [String(c._id || c.id || c.name), c]))
     const existingAssignmentsByCrewId = new Map(
-      (regattaDraft.assignments || []).map((a) => [String(a.crewMemberId || a._id || a.id || a.name), a])
+      (regattaDraft.assignments || []).map((a) => [
+        String(a.crewMemberId || a._id || a.id || a.name),
+        a,
+      ])
     )
 
     const assignments = selectedCrewIdsForRegatta.map((crewId) => {
       const cm = crewById.get(String(crewId))
       const prior = existingAssignmentsByCrewId.get(String(crewId)) || {}
       return {
-        // stable pointer
         crewMemberId: String(crewId),
-        // denormalized display fields for convenience
         name: cm?.name || prior.name || "",
         position: prior.position || cm?.position || "",
         certifications: prior.certifications || cm?.certifications || [],
@@ -298,9 +371,8 @@ export default function App() {
     const url = isEdit ? `${API.regattas}/${payload._id}` : API.regattas
     const method = isEdit ? "PUT" : "POST"
 
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method,
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     })
 
@@ -320,9 +392,8 @@ export default function App() {
     const url = isEdit ? `${API.crew}/${payload._id}` : API.crew
     const method = isEdit ? "PUT" : "POST"
 
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method,
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     })
 
@@ -351,10 +422,7 @@ export default function App() {
   const openEditRegatta = () => {
     if (!selectedRegatta) return
     setRegattaDraft({ ...selectedRegatta })
-    const ids =
-      (selectedRegatta.assignments || [])
-        .map((a) => a.crewMemberId)
-        .filter(Boolean) || []
+    const ids = (selectedRegatta.assignments || []).map((a) => a.crewMemberId).filter(Boolean) || []
     setSelectedCrewIdsForRegatta(ids)
     setShowRegattaModal(true)
   }
@@ -362,6 +430,7 @@ export default function App() {
   const openAddCrew = () => {
     setCrewDraft({
       name: "",
+      email: "", // <-- important for login
       position: "",
       shirtSize: "",
       experienceLevel: "",
@@ -393,45 +462,86 @@ export default function App() {
         <img src={blondFuryImg} alt="Blond Fury" style={styles.heroImage} />
       </header>
 
+      {/* AUTH BAR */}
+      <div style={styles.authBar}>
+        {isLoggedIn ? (
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span>
+              Logged in as <strong>{auth.user?.email || "user"}</strong>{" "}
+              <span style={styles.muted}>({auth.user?.role || "unknown"})</span>
+            </span>
+            <button style={styles.ghostBtn} onClick={logout}>
+              Log out
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              style={{ ...styles.input, width: 220 }}
+              placeholder="email"
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+            />
+            <input
+              style={{ ...styles.input, width: 220 }}
+              placeholder="password"
+              type="password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+            />
+            <button style={styles.button} onClick={login}>
+              Log in
+            </button>
+            {authError ? <span style={styles.error}>{authError}</span> : null}
+          </div>
+        )}
+      </div>
+
       <div style={styles.topRow}>
-        <button style={styles.button} onClick={fetchAll} disabled={loading}>
+        <button style={styles.button} onClick={fetchAll} disabled={loading || !isLoggedIn}>
           {loading ? "Refreshing…" : "🔄 Refresh Data"}
         </button>
         {error && <div style={styles.error}>{error}</div>}
       </div>
 
+      {/* ACTIONS */}
       <div style={styles.actionsRow}>
         <div style={styles.actionsGroup}>
           <strong>Regattas:</strong>
-          <button style={styles.button} onClick={openAddRegatta}>+ Add Regatta</button>
-          <button style={styles.button} onClick={openEditRegatta} disabled={!selectedRegatta}>
+          <button style={styles.button} onClick={openAddRegatta} disabled={!isAdmin}>
+            + Add Regatta
+          </button>
+          <button style={styles.button} onClick={openEditRegatta} disabled={!isAdmin || !selectedRegatta}>
             ✎ Edit Selected Regatta
           </button>
+          {!isAdmin && isLoggedIn ? <span style={styles.muted}>Admin required to edit regattas</span> : null}
         </div>
-
-
       </div>
 
       <main style={styles.main}>
         {/* REGATTA LIST */}
         <aside style={styles.panel}>
           <h3 style={{ marginTop: 0 }}>Regattas</h3>
-          <ul style={styles.list}>
-            {regattas.map((r) => {
-              const id = r._id || r.name
-              const active = id === selectedRegattaId
-              return (
-                <li
-                  key={id}
-                  style={{ ...styles.listItem, ...(active ? styles.activeItem : {}) }}
-                  onClick={() => setSelectedRegattaId(id)}
-                >
-                  <strong>{r.name}</strong>
-                  <div style={styles.muted}>{r.location || "—"}</div>
-                </li>
-              )
-            })}
-          </ul>
+          {!isLoggedIn ? (
+            <div style={styles.muted}>Log in to load data</div>
+          ) : (
+            <ul style={styles.list}>
+              {regattas.map((r) => {
+                const id = r._id || r.name
+                const active = id === selectedRegattaId
+                return (
+                  <li
+                    key={id}
+                    style={{ ...styles.listItem, ...(active ? styles.activeItem : {}) }}
+                    onClick={() => setSelectedRegattaId(id)}
+                  >
+                    <strong>{r.name}</strong>
+                    <div style={styles.muted}>{r.location || "—"}</div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </aside>
 
         {/* REGATTA DETAILS */}
@@ -440,7 +550,6 @@ export default function App() {
             <>
               <h2 style={{ marginTop: 0 }}>{selectedRegatta.name}</h2>
 
-              {/* summary: every field as key: value */}
               <div style={styles.summary}>
                 {Object.entries(selectedRegatta)
                   .filter(([k]) => !OMIT_KEYS.has(k))
@@ -454,10 +563,7 @@ export default function App() {
                   ))}
               </div>
 
-              {/* crew table for this regatta */}
-              <h3 style={{ marginTop: 18 }}>
-                Crew ({selectedRegatta.assignments?.length || 0})
-              </h3>
+              <h3 style={{ marginTop: 18 }}>Crew ({selectedRegatta.assignments?.length || 0})</h3>
 
               <div style={styles.tableWrap}>
                 <table style={styles.table}>
@@ -488,7 +594,6 @@ export default function App() {
                 </table>
               </div>
 
-              {/* stats */}
               <div style={styles.statsRow}>
                 <div style={styles.statCard}>
                   <div style={styles.statLabel}>Number of crew</div>
@@ -499,7 +604,10 @@ export default function App() {
                   <div style={styles.statLabel}>% Safety @ Sea</div>
                   <div style={styles.statValue}>
                     {pct(regattaStats.safety, regattaStats.total)}
-                    <span style={styles.statSub}> ({regattaStats.safety}/{regattaStats.total})</span>
+                    <span style={styles.statSub}>
+                      {" "}
+                      ({regattaStats.safety}/{regattaStats.total})
+                    </span>
                   </div>
                 </div>
 
@@ -507,7 +615,10 @@ export default function App() {
                   <div style={styles.statLabel}>% Man Overboard Drill</div>
                   <div style={styles.statValue}>
                     {pct(regattaStats.mob, regattaStats.total)}
-                    <span style={styles.statSub}> ({regattaStats.mob}/{regattaStats.total})</span>
+                    <span style={styles.statSub}>
+                      {" "}
+                      ({regattaStats.mob}/{regattaStats.total})
+                    </span>
                   </div>
                 </div>
               </div>
@@ -516,10 +627,61 @@ export default function App() {
             <div style={styles.muted}>Select a regatta</div>
           )}
         </section>
-
-
       </main>
-    
+
+      {/* CREW DIRECTORY */}
+      <section style={{ ...styles.panel, marginTop: 18 }}>
+        <h3 style={{ marginTop: 0 }}>Crew Directory</h3>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+          <button style={styles.button} onClick={openAddCrew} disabled={!isAdmin}>
+            + Add Crew Member
+          </button>
+          <button style={styles.button} onClick={openEditCrew} disabled={!canEditSelectedCrew || !selectedCrewMember}>
+            ✎ Edit Selected Crew Member
+          </button>
+          {isLoggedIn && !isAdmin ? (
+            <span style={styles.muted}>Non-admin users can only edit their own profile</span>
+          ) : null}
+        </div>
+
+        <div style={styles.split}>
+          <ul style={{ ...styles.list, margin: 0 }}>
+            {crew.map((c) => {
+              const id = c._id || c.name
+              const active = id === selectedCrewId
+              return (
+                <li
+                  key={id}
+                  style={{ ...styles.listItem, ...(active ? styles.activeItem : {}) }}
+                  onClick={() => setSelectedCrewId(id)}
+                >
+                  <strong>{c.name}</strong>
+                  <div style={styles.muted}>{c.position || "—"}</div>
+                </li>
+              )
+            })}
+          </ul>
+
+          <div style={styles.crewDetails}>
+            {selectedCrewMember ? (
+              <>
+                <h4 style={{ marginTop: 0 }}>{selectedCrewMember.name}</h4>
+                {Object.entries(selectedCrewMember)
+                  .filter(([k]) => !OMIT_KEYS.has(k))
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([k, v]) => (
+                    <div key={k} style={styles.summaryRow}>
+                      <span style={styles.summaryLabel}>{prettyLabel(k)}:</span>{" "}
+                      <span>{formatValue(v)}</span>
+                    </div>
+                  ))}
+              </>
+            ) : (
+              <div style={styles.muted}>Select a crew member</div>
+            )}
+          </div>
+        </div>
+      </section>
 
       {/* REGATTA MODAL */}
       {showRegattaModal && (
@@ -528,11 +690,7 @@ export default function App() {
           onClose={() => setShowRegattaModal(false)}
         >
           <div style={{ display: "grid", gap: 14 }}>
-            <DynamicObjectForm
-              valueObj={regattaDraft}
-              onChange={setRegattaDraft}
-              omitKeys={new Set(["_id", "__v"])} // allow editing assignments separately below
-            />
+            <DynamicObjectForm valueObj={regattaDraft} onChange={setRegattaDraft} omitKeys={new Set(["_id", "__v"])} />
 
             <div style={styles.divider} />
 
@@ -544,21 +702,13 @@ export default function App() {
                   const checked = selectedCrewIdsForRegatta.map(String).includes(id)
                   return (
                     <label key={id} style={styles.crewPickItem}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleCrewForRegatta(id)}
-                      />
+                      <input type="checkbox" checked={checked} onChange={() => toggleCrewForRegatta(id)} />
                       <span style={{ marginLeft: 8 }}>
                         {c.name} <span style={styles.muted}>({c.position || "—"})</span>
                       </span>
                     </label>
                   )
                 })}
-              </div>
-              <div style={styles.muted}>
-                Tip: assignments will be generated from the crew directory; you can extend assignment
-                fields later (position overrides, etc.).
               </div>
             </div>
 
@@ -582,55 +732,7 @@ export default function App() {
           </div>
         </Modal>
       )}
-        {/* CREW DIRECTORY */}
-        <section style={styles.panel}>
-          <h3 style={{ marginTop: 0 }}>Crew Directory</h3>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-  <button style={styles.button} onClick={openAddCrew}>+ Add Crew Member</button>
-  <button style={styles.button} onClick={openEditCrew} disabled={!selectedCrewMember}>
-    ✎ Edit Selected Crew Member
-  </button>
-</div>
-          <div style={styles.split}>
-            <ul style={{ ...styles.list, margin: 0 }}>
-              {crew.map((c) => {
-                const id = c._id || c.name
-                const active = id === selectedCrewId
-                return (
-                  <li
-                    key={id}
-                    style={{ ...styles.listItem, ...(active ? styles.activeItem : {}) }}
-                    onClick={() => setSelectedCrewId(id)}
-                  >
-                    <strong>{c.name}</strong>
-                    <div style={styles.muted}>{c.position || "—"}</div>
-                  </li>
-                )
-              })}
-            </ul>
 
-            <div style={styles.crewDetails}>
-              {selectedCrewMember ? (
-                <>
-                  <h4 style={{ marginTop: 0 }}>{selectedCrewMember.name}</h4>
-                  {Object.entries(selectedCrewMember)
-                    .filter(([k]) => !OMIT_KEYS.has(k))
-                    .sort(([a], [b]) => a.localeCompare(b))
-                    .map(([k, v]) => (
-                      <div key={k} style={styles.summaryRow}>
-                        <span style={styles.summaryLabel}>{prettyLabel(k)}:</span>{" "}
-                        <span>{formatValue(v)}</span>
-                      </div>
-                    ))}
-                </>
-              ) : (
-                <div style={styles.muted}>Select a crew member</div>
-              )}
-            </div>
-          </div>
-        </section>
-
-        
       {/* CREW MODAL */}
       {showCrewModal && (
         <Modal
@@ -639,7 +741,6 @@ export default function App() {
         >
           <div style={{ display: "grid", gap: 14 }}>
             <DynamicObjectForm valueObj={crewDraft} onChange={setCrewDraft} />
-
             <div style={styles.modalFooter}>
               <button style={styles.ghostBtn} onClick={() => setShowCrewModal(false)}>
                 Cancel
@@ -677,9 +778,11 @@ const styles = {
     boxShadow: "0 10px 28px rgba(0,0,0,0.2)",
   },
 
-  topRow: { display: "flex", alignItems: "center", gap: 12, marginBottom: 12 },
+  authBar: { margin: "10px 0 18px 0", display: "flex", justifyContent: "center" },
+
+  topRow: { display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" },
   actionsRow: { display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 18, flexWrap: "wrap" },
-  actionsGroup: { display: "flex", alignItems: "center", gap: 10 },
+  actionsGroup: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
 
   button: {
     padding: "8px 12px",
@@ -706,7 +809,7 @@ const styles = {
   error: { color: "crimson", fontSize: 13 },
   muted: { color: "#666", fontSize: 12 },
 
-  main: { display: "grid", gridTemplateColumns: "300px 1fr 1fr", gap: 18, alignItems: "start" , width: "100%"},
+  main: { display: "grid", gridTemplateColumns: "300px 1fr", gap: 18, alignItems: "start", width: "100%" },
   panel: { border: "1px solid #ddd", borderRadius: 10, padding: 16 },
 
   list: { listStyle: "none", padding: 0, margin: 0 },
@@ -737,7 +840,6 @@ const styles = {
   split: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
   crewDetails: { border: "1px solid #eee", borderRadius: 10, padding: 12, background: "#fafafa" },
 
-  // modal styles
   modalOverlay: {
     position: "fixed",
     inset: 0,
@@ -762,7 +864,13 @@ const styles = {
   formRow: { display: "grid", gridTemplateColumns: "220px 1fr 90px", gap: 10, alignItems: "center" },
   label: { fontWeight: 700, fontSize: 13 },
   input: { padding: 10, borderRadius: 8, border: "1px solid #ddd", width: "100%" },
-  textarea: { padding: 10, borderRadius: 8, border: "1px solid #ddd", width: "100%", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" },
+  textarea: {
+    padding: 10,
+    borderRadius: 8,
+    border: "1px solid #ddd",
+    width: "100%",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
   addFieldRow: { display: "flex", gap: 10, alignItems: "center" },
   divider: { height: 1, background: "#eee", margin: "6px 0" },
 
