@@ -6,9 +6,7 @@ const { MongoClient, ObjectId } = require("mongodb");
 const app = express();
 app.use(express.json());
 
-// --- CORS ---
-// For dev (Vite on 5173), allow localhost origin.
-// For prod, you can tighten this to regattas.blondfury.com.
+// --- CORS (do this early) ---
 app.use(
   cors({
     origin: [
@@ -21,11 +19,38 @@ app.use(
   })
 );
 
+// --- API KEY GATE ---
+const API_KEY = process.env.API_KEY;
+const API_KEY_HEADER = "regatta-api-key";
+
+// Lock down everything under /api (optionally exempt /api/login if you want)
+function requireApiKey(req, res, next) {
+  // Only protect /api/*
+  if (!req.path.startsWith("/api/")) return next();
+
+  // OPTIONAL: make login public by uncommenting this:
+  // if (req.path === "/api/login") return next();
+
+  if (!API_KEY) {
+    console.error("Missing API_KEY env var");
+    return res.status(500).json({ error: "Server misconfigured (API_KEY missing)" });
+  }
+
+  const provided = req.get(API_KEY_HEADER);
+  if (!provided || provided !== API_KEY) {
+    return res.status(401).json({ error: "Invalid or missing API key" });
+  }
+
+  return next();
+}
+
+app.use(requireApiKey);
+
+// --- ENV ---
 const PORT = process.env.PORT || 8080;
 const MONGO_URI = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET || "wiz-exercise-dev-secret";
 
-// Demo admin credentials (from env)
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@blondfury.com";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "password";
 
@@ -39,7 +64,7 @@ let db;
 // --- Mongo connect ---
 MongoClient.connect(MONGO_URI, { serverSelectionTimeoutMS: 8000 })
   .then((client) => {
-    db = client.db(); // uses DB from URI
+    db = client.db();
     console.log("Connected to MongoDB");
   })
   .catch((err) => {
@@ -63,14 +88,10 @@ function toObjectId(id, res) {
   return new ObjectId(id);
 }
 
+// --- AUTH / RBAC ---
 function signToken(user) {
-  // keep payload small
   return jwt.sign(
-    {
-      role: user.role,
-      email: user.email,
-      crewMemberId: user.crewMemberId || null,
-    },
+    { role: user.role, email: user.email, crewMemberId: user.crewMemberId || null },
     JWT_SECRET,
     { expiresIn: "12h" }
   );
@@ -78,29 +99,24 @@ function signToken(user) {
 
 function authRequired(req, res, next) {
   const h = req.headers.authorization || "";
-  const parts = h.split(" ");
-  if (parts.length !== 2 || parts[0] !== "Bearer") {
+  const [scheme, token] = h.split(" ");
+  if (scheme !== "Bearer" || !token) {
     return res.status(401).json({ error: "Missing Authorization Bearer token" });
   }
-  const token = parts[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded; // { role,email,crewMemberId }
-    next();
-  } catch (e) {
+    req.user = jwt.verify(token, JWT_SECRET);
+    return next();
+  } catch {
     return res.status(401).json({ error: "Invalid/expired token" });
   }
 }
 
 function adminOnly(req, res, next) {
-  if (req.user?.role !== "admin") {
-    return res.status(403).json({ error: "Admin only" });
-  }
-  next();
+  if (req.user?.role !== "admin") return res.status(403).json({ error: "Admin only" });
+  return next();
 }
 
 function adminOrSelfCrew(req, res, next) {
-  // for /api/crew-members/:id
   const id = String(req.params.id || "");
   const selfId = req.user?.crewMemberId ? String(req.user.crewMemberId) : "";
   if (req.user?.role === "admin" || (selfId && id === selfId)) return next();
@@ -113,10 +129,7 @@ app.get("/", (req, res) =>
   res.status(200).send("Blond Fury Regatta Tracker API is running. Try /health or /api/regattas")
 );
 
-// --- LOGIN ---
-// Demo rules:
-// - admin logs in with ADMIN_EMAIL + ADMIN_PASSWORD
-// - crew logs in with an email that exists in crew_members collection, and uses password "crew"
+// --- LOGIN (API key REQUIRED unless you exempted above) ---
 app.post("/api/login", async (req, res) => {
   if (!requireDb(res)) return;
   const { email, password } = req.body || {};
@@ -127,35 +140,30 @@ app.post("/api/login", async (req, res) => {
   // Admin login
   if (normalizedEmail === String(ADMIN_EMAIL).trim().toLowerCase()) {
     if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: "Invalid credentials" });
-
     const user = { role: "admin", email: normalizedEmail };
-    const token = signToken(user);
-    return res.json({ token, user });
+    return res.json({ token: signToken(user), user });
   }
 
-  // Crew login (demo)
+  // Crew login (demo password)
   if (password !== "crew") {
     return res.status(401).json({ error: "Invalid credentials (crew demo password is 'crew')" });
   }
 
-  // find crew member by email field
   const crew = await db.collection("crew_members").findOne({ email: normalizedEmail });
   if (!crew) return res.status(401).json({ error: "No crew member found for that email" });
 
   const user = { role: "crew", email: normalizedEmail, crewMemberId: String(crew._id) };
-  const token = signToken(user);
-  return res.json({ token, user });
+  return res.json({ token: signToken(user), user });
 });
 
-// --- REGATTAS ---
-// Read allowed for logged-in users
-app.get("/api/regattas", authRequired, async (req, res) => {
+// --- REGATTAS (READ = API KEY only) ---
+app.get("/api/regattas", async (req, res) => {
   if (!requireDb(res)) return;
   const regattas = await db.collection("regattas").find().toArray();
   res.json(regattas);
 });
 
-// Write admin only
+// --- REGATTAS (WRITE = JWT + admin) ---
 app.post("/api/regattas", authRequired, adminOnly, async (req, res) => {
   if (!requireDb(res)) return;
   const payload = req.body || {};
@@ -175,25 +183,23 @@ app.put("/api/regattas/:id", authRequired, adminOnly, async (req, res) => {
 
   const r = await db.collection("regattas").updateOne({ _id: oid }, { $set: payload });
   if (!r.matchedCount) return res.status(404).json({ error: "not found" });
+
   const updated = await db.collection("regattas").findOne({ _id: oid });
   res.json(updated);
 });
 
-// --- CREW ---
-// Read allowed for logged-in users
-app.get("/api/crew-members", authRequired, async (req, res) => {
+// --- CREW (READ = API KEY only) ---
+app.get("/api/crew-members", async (req, res) => {
   if (!requireDb(res)) return;
   const crew = await db.collection("crew_members").find().toArray();
   res.json(crew);
 });
 
-// Create crew: admin only
+// --- CREW (WRITE = JWT; create=admin, update=admin or self) ---
 app.post("/api/crew-members", authRequired, adminOnly, async (req, res) => {
   if (!requireDb(res)) return;
   const payload = req.body || {};
   if (!payload.name) return res.status(400).json({ error: "name is required" });
-
-  // normalize email if present
   if (payload.email) payload.email = String(payload.email).trim().toLowerCase();
 
   const result = await db.collection("crew_members").insertOne(payload);
@@ -201,18 +207,18 @@ app.post("/api/crew-members", authRequired, adminOnly, async (req, res) => {
   res.status(201).json(created);
 });
 
-// Update crew: admin OR self
 app.put("/api/crew-members/:id", authRequired, adminOrSelfCrew, async (req, res) => {
   if (!requireDb(res)) return;
   const oid = toObjectId(req.params.id, res);
   if (!oid) return;
+
   const payload = req.body || {};
   delete payload._id;
-
   if (payload.email) payload.email = String(payload.email).trim().toLowerCase();
 
   const r = await db.collection("crew_members").updateOne({ _id: oid }, { $set: payload });
   if (!r.matchedCount) return res.status(404).json({ error: "not found" });
+
   const updated = await db.collection("crew_members").findOne({ _id: oid });
   res.json(updated);
 });

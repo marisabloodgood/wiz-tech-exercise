@@ -13,22 +13,24 @@ spec:
         app: regatta-api
     spec:
       serviceAccountName: regatta-api-sa
-      containers:
-        - name: api
-          image: gcr.io/clgcporg10-162/regatta-api:latest
-          ports:
-            - containerPort: 8080
-          env:
-            - name: MONGO_URI
-              value: "mongodb://wizuser:WizPassw0rd!@10.10.0.2:27017/regatta_tracker?authSource=admin"
-            - name: JWT_SECRET
-              value: "wiz-exercise-dev-secret"
-            - name: ADMIN_EMAIL
-              value: "admin@blondfury.com"
-            - name: ADMIN_PASSWORD
-              value: "password"
-            - name: CORS_ORIGINS
-              value: "http://localhost:5173"
+    containers:
+    - name: api
+      image: gcr.io/clgcporg10-162/regatta-api:latest
+      ports:
+        - containerPort: 8080
+      env:
+        - name: MONGO_URI
+          value: "mongodb://wizuser:WizPassw0rd!@10.10.0.2:27017/regatta_tracker?authSource=admin"
+        - name: JWT_SECRET
+          value: "wiz-exercise-dev-secret"
+        - name: ADMIN_EMAIL
+          value: "admin@blondfury.com"
+        - name: ADMIN_PASSWORD
+          value: "password"
+        - name: CORS_ORIGINS
+          value: "http://localhost:5173"
+        - name: API_KEY
+          value: "dev-super-secret-api-key"
 ---
 apiVersion: v1
 kind: Service
