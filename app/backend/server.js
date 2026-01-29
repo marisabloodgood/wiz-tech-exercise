@@ -35,12 +35,7 @@ function requireApiKey(req, res, next) {
     return res.status(500).json({ error: "Server misconfigured (API_KEY missing)" });
   }
 
-  const provided = req.get(API_KEY_HEADER);
-  if (!provided || provided !== API_KEY) {
-    return res.status(401).json({ error: "Invalid or missing API key" });
-  }
-
-  return next();
+ 
 }
 
   const provided = req.get(API_KEY_HEADER);
