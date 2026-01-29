@@ -9,6 +9,22 @@ const API = {
   crew: `${API_BASE_URL}/api/crew-members`,
 }
 
+const API_KEY = import.meta.env.VITE_API_KEY || "";
+
+function apiFetch(url, opts = {}) {
+  const token = localStorage.getItem("token") || "";
+
+  const headers = {
+    "Content-Type": "application/json",
+    "regatta-api-key": API_KEY,      // ✅ MUST MATCH BACKEND
+    ...(opts.headers || {}),
+  };
+
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  return fetch(url, { ...opts, headers });
+}
+
 const OMIT_KEYS = new Set(["_id", "__v"])
 
 function prettyLabel(key) {
@@ -58,15 +74,6 @@ function setToken(token) {
 }
 function clearToken() {
   localStorage.removeItem("token")
-}
-async function apiFetch(url, opts = {}) {
-  const token = getToken()
-  const headers = {
-    ...(opts.headers || {}),
-    "Content-Type": "application/json",
-  }
-  if (token) headers.Authorization = `Bearer ${token}`
-  return fetch(url, { ...opts, headers })
 }
 
 /**
@@ -251,11 +258,10 @@ export default function App() {
   const login = async () => {
     setAuthError("")
     try {
-      const res = await fetch(API.login, {
+      const res = await apiFetch(API.login, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: loginEmail, password: loginPassword }),
-      })
+      });
 
       if (!res.ok) {
         const txt = await res.text().catch(() => "")
@@ -267,7 +273,7 @@ export default function App() {
       localStorage.setItem("user", JSON.stringify(data.user || null))
       setAuth({ token: data.token, user: data.user || null })
       setLoginPassword("")
-      await fetchAll()
+      await apiFetchAll()
     } catch (e) {
       setAuthError(e?.message || String(e))
     }
@@ -283,14 +289,14 @@ export default function App() {
     setSelectedCrewId(null)
   }
 
-  const fetchAll = async () => {
+  const apiFetchAll = async () => {
     if (!isLoggedIn) return
     setLoading(true)
     setError("")
     try {
       const [r1, r2] = await Promise.all([apiFetch(API.regattas), apiFetch(API.crew)])
-      if (!r1.ok) throw new Error(`Failed to fetch regattas (${r1.status})`)
-      if (!r2.ok) throw new Error(`Failed to fetch crew members (${r2.status})`)
+      if (!r1.ok) throw new Error(`Failed to apiFetch regattas (${r1.status})`)
+      if (!r2.ok) throw new Error(`Failed to apiFetch crew members (${r2.status})`)
       const regData = await r1.json()
       const crewData = await r2.json()
 
@@ -310,7 +316,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (isLoggedIn) fetchAll()
+    if (isLoggedIn) apiFetchAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn])
 
@@ -382,7 +388,7 @@ export default function App() {
     }
 
     setShowRegattaModal(false)
-    await fetchAll()
+    await apiFetchAll()
   }
 
   const saveCrew = async () => {
@@ -403,7 +409,7 @@ export default function App() {
     }
 
     setShowCrewModal(false)
-    await fetchAll()
+    await apiFetchAll()
   }
 
   const openAddRegatta = () => {
@@ -498,7 +504,7 @@ export default function App() {
       </div>
 
       <div style={styles.topRow}>
-        <button style={styles.button} onClick={fetchAll} disabled={loading || !isLoggedIn}>
+        <button style={styles.button} onClick={apiFetchAll} disabled={loading || !isLoggedIn}>
           {loading ? "Refreshing…" : "🔄 Refresh Data"}
         </button>
         {error && <div style={styles.error}>{error}</div>}
