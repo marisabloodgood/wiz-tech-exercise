@@ -23,13 +23,12 @@ app.use(
 const API_KEY = process.env.API_KEY;
 const API_KEY_HEADER = "regatta-api-key";
 
-// Lock down everything under /api (optionally exempt /api/login if you want)
 function requireApiKey(req, res, next) {
-  // Only protect /api/*
+  // Only apply to /api/*
   if (!req.path.startsWith("/api/")) return next();
 
-  // OPTIONAL: make login public by uncommenting this:
-  // if (req.path === "/api/login") return next();
+  // ✅ Allow login without API key
+  if (req.path === "/api/login") return next();
 
   if (!API_KEY) {
     console.error("Missing API_KEY env var");
@@ -44,6 +43,15 @@ function requireApiKey(req, res, next) {
   return next();
 }
 
+  const provided = req.get(API_KEY_HEADER);
+  if (!provided || provided !== API_KEY) {
+    return res.status(401).json({ error: "Invalid or missing API key" });
+  }
+
+  return next();
+}
+
+// IMPORTANT: this must be BEFORE your /api routes
 app.use(requireApiKey);
 
 // --- ENV ---
