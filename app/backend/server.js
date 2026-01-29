@@ -49,7 +49,6 @@ function requireApiKey(req, res, next) {
   }
 
   return next();
-}
 
 // IMPORTANT: this must be BEFORE your /api routes
 app.use(requireApiKey);
