@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: regatta-mongo-backup
+spec:
+  schedule: "0 7 * * *" # daily 07:00 UTC
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: gcr.io/clgcporg10-162/regatta-backup:v1
+              env:
+                - name: BUCKET_NAME
+                  value: "regatta-db-backups-blondfury"
+                - name: MONGO_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: regatta-api-secrets
+                      key: MONGO_URI
+                - name: GOOGLE_APPLICATION_CREDENTIALS
+                  value: /var/secrets/google/sa-key.json
+              volumeMounts:
+                - name: gcs-sa-key
+                  mountPath: /var/secrets/google
+                  readOnly: true
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  TS="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+                  OUT_DIR="/tmp/mongo-backup-$TS"
+                  ARCHIVE="/tmp/mongo-backup-$TS.tgz"
+
+                  echo "==> mongodump..."
+                  mkdir -p "$OUT_DIR"
+                  mongodump --uri="$MONGO_URI" --out="$OUT_DIR"
+
+                  echo "==> tar..."
+                  tar -czf "$ARCHIVE" -C /tmp "mongo-backup-$TS"
+
+                  echo "==> gsutil cp..."
+                  gsutil cp "$ARCHIVE" "gs://$BUCKET_NAME/mongo-backups/$TS.tgz"
+                  echo "==> done"
+          volumes:
+            - name: gcs-sa-key
+              secret:
+                secretName: gcs-backup-sa-key
